@@ -1,10 +1,3 @@
-//
-//  ErrorFooterView.swift
-//  ErrorFooterView
-//
-//  Created by Rajesh Mani on 27/02/26.
-//
-
 import SwiftUI
 
 struct ErrorFooterView: View {
@@ -23,7 +16,6 @@ struct ErrorFooterView: View {
                 .controlSize(.small)
         }
         .frame(maxWidth: .infinity)
-        .padding(.vertical, 12)
-        .listRowSeparator(.hidden)
+        .padding(.vertical, 10)
     }
 }

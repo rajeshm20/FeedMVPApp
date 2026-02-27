@@ -1,10 +1,3 @@
-//
-//  LoadingFooterView.swift
-//  LoadingFooterView
-//
-//  Created by Rajesh Mani on 27/02/26.
-//
-
 import SwiftUI
 
 struct LoadingFooterView: View {
@@ -15,8 +8,7 @@ struct LoadingFooterView: View {
                 .font(.footnote)
                 .foregroundStyle(.secondary)
         }
-        .frame(maxWidth: .infinity, alignment: .center)
-        .padding(.vertical, 12)
-        .listRowSeparator(.hidden)
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 10)
     }
 }

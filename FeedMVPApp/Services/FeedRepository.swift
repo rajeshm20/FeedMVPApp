@@ -1,24 +1,23 @@
-//
-//  FeedRepository.swift
-//  FeedRepository
-//
-//  Created by Rajesh Mani on 27/02/26.
-//
-
 import Foundation
 
-struct FeedPage {
-    let items: [FeedItem]
+struct Pagination: Codable {
+    let nextCursor: String?
     let hasMore: Bool
 }
 
+struct PaginatedResponse<T: Codable>: Codable {
+    let data: [T]
+    let pagination: Pagination
+}
+
 protocol FeedRepository {
-    func fetchPage(page: Int, pageSize: Int) async throws -> FeedPage
+    func fetchPosts(cursor: String?, limit: Int) async throws -> PaginatedResponse<FeedItem>
 }
 
 enum FeedRepositoryError: Error, LocalizedError {
     case missingResource
     case corruptedData
+    case invalidCursor
 
     var errorDescription: String? {
         switch self {
@@ -26,40 +25,58 @@ enum FeedRepositoryError: Error, LocalizedError {
             return "Could not find bundled feed.json"
         case .corruptedData:
             return "Feed data is invalid"
+        case .invalidCursor:
+            return "Cursor is invalid"
         }
     }
 }
 
 final class JSONFeedRepository: FeedRepository {
+    private struct CursorPayload: Codable {
+        let index: Int
+    }
+
+    private struct FeedSeed: Codable {
+        let data: [FeedItem]
+        let pagination: Pagination
+    }
+
     private let bundle: Bundle
     private let resourceName: String
-    private var cachedItems: [FeedItem]?
+    private var cachedSeed: FeedSeed?
 
     init(bundle: Bundle = .main, resourceName: String = "feed") {
         self.bundle = bundle
         self.resourceName = resourceName
     }
 
-    func fetchPage(page: Int, pageSize: Int) async throws -> FeedPage {
-        let items = try loadFeedItems()
+    func fetchPosts(cursor: String?, limit: Int) async throws -> PaginatedResponse<FeedItem> {
+        let seed = try loadFeedSeed()
+        let items = seed.data
 
-        // Simulate network latency so loading indicators and prefetch are visible.
-        try await Task.sleep(for: .milliseconds(300))
+        // Simulate API latency so loading/prefetch behavior is visible.
+        try await Task.sleep(for: .milliseconds(250))
 
-        let start = page * pageSize
-        guard start < items.count else {
-            return FeedPage(items: [], hasMore: false)
+        let startIndex = try decodeCursor(cursor)
+        guard startIndex <= items.count else {
+            throw FeedRepositoryError.invalidCursor
         }
 
-        let end = min(start + pageSize, items.count)
-        let slice = Array(items[start..<end])
+        let endIndex = min(startIndex + limit, items.count)
+        let pageItems = Array(items[startIndex..<endIndex])
 
-        return FeedPage(items: slice, hasMore: end < items.count)
+        let hasMore = endIndex < items.count
+        let nextCursor = hasMore ? encodeCursor(endIndex) : nil
+
+        return PaginatedResponse(
+            data: pageItems,
+            pagination: Pagination(nextCursor: nextCursor, hasMore: hasMore)
+        )
     }
 
-    private func loadFeedItems() throws -> [FeedItem] {
-        if let cachedItems {
-            return cachedItems
+    private func loadFeedSeed() throws -> FeedSeed {
+        if let cachedSeed {
+            return cachedSeed
         }
 
         guard let url = bundle.url(forResource: resourceName, withExtension: "json") else {
@@ -71,11 +88,34 @@ final class JSONFeedRepository: FeedRepository {
         decoder.dateDecodingStrategy = .iso8601
 
         do {
-            let items = try decoder.decode([FeedItem].self, from: data)
-            cachedItems = items
-            return items
+            let seed = try decoder.decode(FeedSeed.self, from: data)
+            cachedSeed = seed
+            return seed
         } catch {
             throw FeedRepositoryError.corruptedData
         }
+    }
+
+    private func encodeCursor(_ value: Int) -> String {
+        let payload = CursorPayload(index: value)
+        let data = (try? JSONEncoder().encode(payload)) ?? Data()
+        return data.base64EncodedString()
+    }
+
+    private func decodeCursor(_ cursor: String?) throws -> Int {
+        guard let cursor else { return 0 }
+
+        guard let rawData = Data(base64Encoded: cursor) else {
+            throw FeedRepositoryError.invalidCursor
+        }
+
+        guard
+            let payload = try? JSONDecoder().decode(CursorPayload.self, from: rawData),
+            payload.index >= 0
+        else {
+            throw FeedRepositoryError.invalidCursor
+        }
+
+        return payload.index
     }
 }

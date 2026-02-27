@@ -1,63 +1,55 @@
-//
-//  FeedListView.swift
-//  FeedListView
-//
-//  Created by Rajesh Mani on 27/02/26.
-//
-
 import SwiftUI
 
 struct FeedListView: View {
-    @StateObject private var viewModel = FeedViewModel()
+    @StateObject private var service = FeedService()
 
     var body: some View {
         NavigationStack {
-            Group {
-                if viewModel.items.isEmpty && viewModel.state == .initialLoading {
-                    ProgressView("Loading feed...")
-                } else {
-                    feedList
-                }
-            }
-            .navigationTitle("Discover")
-            .task {
-                viewModel.loadInitialIfNeeded()
-            }
-            .refreshable {
-                await viewModel.refresh()
-            }
-        }
-    }
-
-    private var feedList: some View {
-        List {
-            ForEach(viewModel.items) { item in
-                FeedRowView(item: item)
-                    .onAppear {
-                        viewModel.loadMoreIfNeeded(currentItem: item)
+            ScrollView {
+                LazyVStack(spacing: 16) {
+                    ForEach(service.posts) { post in
+                        PostCard(post: post)
+                            .onAppear {
+                                if service.shouldPrefetch(for: post) {
+                                    Task {
+                                        await service.loadMorePosts()
+                                    }
+                                }
+                            }
                     }
-            }
 
-            if viewModel.showsLoadingFooter {
-                LoadingFooterView()
-            }
+                    if service.isLoading {
+                        LoadingFooterView()
+                    }
 
-            if case .failed(let message) = viewModel.state {
-                ErrorFooterView(message: message) {
-                    viewModel.retry()
+                    if let errorMessage = service.errorMessage {
+                        ErrorFooterView(message: errorMessage) {
+                            Task {
+                                await service.loadMorePosts()
+                            }
+                        }
+                    }
+
+                    if !service.hasMoreContent && !service.posts.isEmpty {
+                        Text("You are all caught up")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                            .padding(.vertical, 10)
+                    }
+                }
+                .padding(.horizontal, 16)
+                .padding(.top, 12)
+            }
+            .navigationTitle("Feed")
+            .refreshable {
+                await service.loadInitialPosts()
+            }
+            .task {
+                if service.posts.isEmpty {
+                    await service.loadInitialPosts()
                 }
             }
-
-            if viewModel.showsEndOfFeed {
-                Text("You are all caught up")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity, alignment: .center)
-                    .padding(.vertical, 12)
-                    .listRowSeparator(.hidden)
-            }
         }
-        .listStyle(.plain)
     }
 }
 

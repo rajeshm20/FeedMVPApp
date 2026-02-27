@@ -1,115 +1,83 @@
-//
-//  FeedViewModel.swift
-//  FeedViewModel
-//
-//  Created by Rajesh Mani on 27/02/26.
-//
-
 import Foundation
-internal import Combine
+import Combine
 
 @MainActor
-final class FeedViewModel: ObservableObject {
-    enum LoadState: Equatable {
-        case idle
-        case initialLoading
-        case loadingMore
-        case endReached
-        case failed(String)
-    }
+final class FeedService: ObservableObject {
+    @Published var posts: [FeedItem] = []
+    @Published var isLoading = false
+    @Published var hasMoreContent = true
+    @Published var errorMessage: String?
 
-    @Published private(set) var items: [FeedItem] = []
-    @Published private(set) var state: LoadState = .idle
-
-    private let repository: FeedRepository
+    private var currentCursor: String?
     private let pageSize: Int
-    private let prefetchWindow: Int
-
-    private var nextPage = 0
-    private var canLoadMore = true
-    private var isLoading = false
+    private let prefetchThreshold: Int
+    private let maxInMemoryItems: Int
+    private let repository: FeedRepository
     private var seenIDs = Set<Int>()
 
     init(
         repository: FeedRepository? = nil,
         pageSize: Int = 20,
-        prefetchWindow: Int = 5
+        prefetchThreshold: Int = 5,
+        maxInMemoryItems: Int = 120
     ) {
         self.repository = repository ?? JSONFeedRepository()
         self.pageSize = pageSize
-        self.prefetchWindow = prefetchWindow
+        self.prefetchThreshold = prefetchThreshold
+        self.maxInMemoryItems = maxInMemoryItems
     }
 
-    var showsLoadingFooter: Bool {
-        state == .loadingMore && !items.isEmpty
+    func loadInitialPosts() async {
+        currentCursor = nil
+        posts.removeAll(keepingCapacity: true)
+        seenIDs.removeAll(keepingCapacity: true)
+        hasMoreContent = true
+        errorMessage = nil
+
+        await loadMorePosts()
     }
 
-    var showsEndOfFeed: Bool {
-        state == .endReached && !items.isEmpty
-    }
-
-    func loadInitialIfNeeded() {
-        guard items.isEmpty else { return }
-        Task {
-            await refresh()
-        }
-    }
-
-    func refresh() async {
-        nextPage = 0
-        canLoadMore = true
-        isLoading = false
-        seenIDs.removeAll()
-        items.removeAll(keepingCapacity: true)
-        state = .initialLoading
-
-        await loadNextPage()
-    }
-
-    func retry() {
-        Task {
-            await loadNextPage()
-        }
-    }
-
-    func loadMoreIfNeeded(currentItem: FeedItem) {
-        guard shouldPrefetch(afterSeeing: currentItem) else { return }
-        Task {
-            await loadNextPage()
-        }
-    }
-
-    private func shouldPrefetch(afterSeeing item: FeedItem) -> Bool {
-        guard canLoadMore, !isLoading else { return false }
-        guard let currentIndex = items.firstIndex(where: { $0.id == item.id }) else { return false }
-
-        let thresholdIndex = max(items.count - prefetchWindow, 0)
-        return currentIndex >= thresholdIndex
-    }
-
-    private func loadNextPage() async {
-        guard canLoadMore, !isLoading else { return }
+    func loadMorePosts() async {
+        // Debounce duplicate requests and stop once feed ends.
+        guard !isLoading && hasMoreContent else { return }
 
         isLoading = true
-        if items.isEmpty {
-            state = .initialLoading
-        } else {
-            state = .loadingMore
-        }
+        defer { isLoading = false }
 
         do {
-            let page = try await repository.fetchPage(page: nextPage, pageSize: pageSize)
-            let uniqueItems = page.items.filter { seenIDs.insert($0.id).inserted }
+            let response = try await repository.fetchPosts(cursor: currentCursor, limit: pageSize)
 
-            items.append(contentsOf: uniqueItems)
-            nextPage += 1
-            canLoadMore = page.hasMore
+            let uniquePosts = response.data.filter { post in
+                seenIDs.insert(post.id).inserted
+            }
 
-            state = canLoadMore ? .idle : .endReached
+            posts.append(contentsOf: uniquePosts)
+            trimIfNeeded()
+
+            currentCursor = response.pagination.nextCursor
+            hasMoreContent = response.pagination.hasMore
+            errorMessage = nil
         } catch {
-            state = .failed(error.localizedDescription)
+            errorMessage = error.localizedDescription
         }
+    }
 
-        isLoading = false
+    func shouldPrefetch(for post: FeedItem) -> Bool {
+        guard !isLoading && hasMoreContent else { return false }
+        guard let index = posts.firstIndex(of: post) else { return false }
+
+        return index >= max(posts.count - prefetchThreshold, 0)
+    }
+
+    private func trimIfNeeded() {
+        let overflow = posts.count - maxInMemoryItems
+        guard overflow > 0 else { return }
+
+        let removed = posts.prefix(overflow)
+        posts.removeFirst(overflow)
+
+        for item in removed {
+            seenIDs.remove(item.id)
+        }
     }
 }

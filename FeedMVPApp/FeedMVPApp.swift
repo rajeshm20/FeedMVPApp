@@ -1,9 +1,3 @@
-//
-//  FeedMVPApp.swift
-//  FeedMVPApp
-//
-//  Created by Rajesh Mani on 27/02/26.
-//
 import SwiftUI
 
 @main
